@@ -1,36 +1,43 @@
 package com.example.auth.service;
 
-import lombok.RequiredArgsConstructor;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
-import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Maintains a Redis set of revoked access-token IDs (jti). Entries are stored
- * only until the token would have expired anyway, so the blacklist stays bounded.
+ * Keeps track of access tokens that have been revoked via logout.
+ *
+ * <p>This is an in-memory store (a concurrent map of token id -> expiry). It is
+ * intentionally simple for learning purposes; in a multi-instance production
+ * deployment you would use a shared store (e.g. Redis) instead. Expired entries
+ * are pruned lazily on lookup so the map does not grow unbounded.
  */
 @Service
-@RequiredArgsConstructor
 public class TokenBlacklistService {
 
-    private static final String KEY_PREFIX = "bl:jti:";
+    private final Map<String, Instant> blacklisted = new ConcurrentHashMap<>();
 
-    private final StringRedisTemplate redisTemplate;
-
-    /**
-     * Blacklist a token by its jti until its natural expiry.
-     */
+    /** Revoke a token by its id (jti) until its natural expiry. */
     public void blacklist(String jti, Instant expiresAt) {
-        long ttlSeconds = Duration.between(Instant.now(), expiresAt).getSeconds();
-        if (ttlSeconds <= 0) {
-            return; // already expired; nothing to keep
+        if (jti != null) {
+            blacklisted.put(jti, expiresAt);
         }
-        redisTemplate.opsForValue().set(KEY_PREFIX + jti, "1", Duration.ofSeconds(ttlSeconds));
     }
 
     public boolean isBlacklisted(String jti) {
-        return jti != null && Boolean.TRUE.equals(redisTemplate.hasKey(KEY_PREFIX + jti));
+        if (jti == null) {
+            return false;
+        }
+        Instant expiry = blacklisted.get(jti);
+        if (expiry == null) {
+            return false;
+        }
+        if (expiry.isBefore(Instant.now())) {
+            blacklisted.remove(jti); // already expired; clean up
+            return false;
+        }
+        return true;
     }
 }

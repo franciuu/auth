@@ -1,7 +1,7 @@
 package com.example.auth.security;
 
-import com.example.auth.entity.AuditEventType;
-import com.example.auth.entity.Severity;
+import com.example.auth.model.AuditEventType;
+import com.example.auth.model.Severity;
 import com.example.auth.service.AuditService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;

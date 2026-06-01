@@ -1,11 +1,9 @@
 package com.example.auth.service;
 
-import com.example.auth.dto.AdminUserResponse;
-import com.example.auth.dto.UserProfileResponse;
-import com.example.auth.entity.AuditEventType;
-import com.example.auth.entity.Severity;
-import com.example.auth.entity.User;
 import com.example.auth.exception.AuthException;
+import com.example.auth.model.AuditEventType;
+import com.example.auth.model.Severity;
+import com.example.auth.model.User;
 import com.example.auth.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -22,20 +20,14 @@ public class UserService {
     private final AuditService auditService;
 
     @Transactional(readOnly = true)
-    public UserProfileResponse getProfile(String email) {
-        User user = userRepository.findByEmail(email)
+    public User getProfile(String email) {
+        return userRepository.findByEmail(email)
                 .orElseThrow(() -> new AuthException(HttpStatus.NOT_FOUND, "User not found"));
-        return new UserProfileResponse(
-                user.getId(), user.getEmail(), user.getFullName(), user.getRoles());
     }
 
     @Transactional(readOnly = true)
-    public List<AdminUserResponse> listAllUsers() {
-        return userRepository.findAll().stream()
-                .map(u -> new AdminUserResponse(
-                        u.getId(), u.getEmail(), u.getFullName(),
-                        u.getRoles(), u.isActive(), u.getCreatedAt()))
-                .toList();
+    public List<User> listAllUsers() {
+        return userRepository.findAll();
     }
 
     @Transactional

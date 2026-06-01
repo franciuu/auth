@@ -1,4 +1,4 @@
-package com.example.auth.entity;
+package com.example.auth.model;
 
 /**
  * Application roles. Stored with the Spring Security "ROLE_" prefix convention

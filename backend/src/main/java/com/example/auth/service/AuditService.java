@@ -1,8 +1,8 @@
 package com.example.auth.service;
 
-import com.example.auth.entity.AuditEventType;
-import com.example.auth.entity.AuditLog;
-import com.example.auth.entity.Severity;
+import com.example.auth.model.AuditEventType;
+import com.example.auth.model.AuditLog;
+import com.example.auth.model.Severity;
 import com.example.auth.repository.AuditLogRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

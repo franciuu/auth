@@ -97,9 +97,6 @@ export default function AuthPage({ mode }) {
 
 function formatError(err) {
   if (err instanceof ApiError) {
-    if (err.status === 429) {
-      return 'Too many attempts. Please wait a few minutes and try again.';
-    }
     // Surface field-level validation messages (e.g. password strength).
     if (err.data && err.data.errors) {
       return Object.values(err.data.errors).join(' ');

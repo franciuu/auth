@@ -1,7 +1,7 @@
 package com.example.auth.security;
 
-import com.example.auth.entity.Role;
-import com.example.auth.entity.User;
+import com.example.auth.model.Role;
+import com.example.auth.model.User;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jws;
 import io.jsonwebtoken.JwtException;

@@ -1,30 +1,34 @@
 package com.example.auth.service;
 
-import com.example.auth.dto.AuthResponse;
 import com.example.auth.dto.LoginRequest;
 import com.example.auth.dto.RefreshRequest;
 import com.example.auth.dto.RegisterRequest;
-import com.example.auth.entity.AuditEventType;
-import com.example.auth.entity.Role;
-import com.example.auth.entity.Severity;
-import com.example.auth.entity.User;
 import com.example.auth.exception.AuthException;
+import com.example.auth.model.AuditEventType;
+import com.example.auth.model.Role;
+import com.example.auth.model.Severity;
+import com.example.auth.model.User;
 import com.example.auth.repository.UserRepository;
 import com.example.auth.security.JwtTokenProvider;
 import io.jsonwebtoken.Claims;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Set;
 
 /**
  * Core authentication flows: registration, login, refresh-with-rotation, logout.
  * All client-facing failures use generic messages to prevent user enumeration.
+ *
+ * <p>Login and refresh return a plain map of token data (accessToken,
+ * refreshToken, expiresIn) - kept deliberately simple since DTOs here are used
+ * only for incoming requests.
  */
 @Service
 @RequiredArgsConstructor
@@ -37,13 +41,8 @@ public class AuthService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider tokenProvider;
-    private final RateLimitService rateLimitService;
     private final TokenBlacklistService tokenBlacklistService;
     private final AuditService auditService;
-    private final EmailVerificationService emailVerificationService;
-
-    @Value("${app.email.verification-required:false}")
-    private boolean emailVerificationRequired;
 
     @Transactional
     public void register(RegisterRequest request) {
@@ -66,38 +65,18 @@ public class AuthService {
                 .email(email)
                 .passwordHash(passwordHash)
                 .fullName(request.fullName().trim())
-                .emailVerified(false)
                 .active(true)
                 .roles(Set.of(Role.ROLE_USER))
                 .build();
         User saved = userRepository.save(user);
 
-        emailVerificationService.sendVerificationToken(email);
         auditService.record(AuditEventType.USER_REGISTERED, saved.getId(), Severity.INFO,
                 "New user registered");
     }
 
     @Transactional
-    public void verifyEmail(String token) {
-        String email = emailVerificationService.consumeToken(token);
-        if (email == null) {
-            throw new AuthException(HttpStatus.BAD_REQUEST, "Invalid or expired verification token");
-        }
-        userRepository.findByEmail(email).ifPresent(user -> {
-            user.setEmailVerified(true);
-            userRepository.save(user);
-            auditService.record(AuditEventType.EMAIL_VERIFIED, user.getId(), Severity.INFO,
-                    "Email verified");
-        });
-    }
-
-    @Transactional
-    public AuthResponse login(LoginRequest request, String clientIp) {
+    public Map<String, Object> login(LoginRequest request) {
         String email = normalize(request.email());
-        String rateLimitKey = email + "|" + clientIp;
-
-        // Reject early if too many recent failures.
-        rateLimitService.checkAllowed(rateLimitKey);
 
         User user = userRepository.findByEmail(email).orElse(null);
 
@@ -105,7 +84,6 @@ public class AuthService {
                 && passwordEncoder.matches(request.password(), user.getPasswordHash());
 
         if (user == null || !passwordMatches) {
-            rateLimitService.recordFailure(rateLimitKey);
             auditService.record(AuditEventType.FAILED_LOGIN,
                     user != null ? user.getId() : null, Severity.WARN,
                     "Failed login attempt");
@@ -119,19 +97,11 @@ public class AuthService {
             throw new AuthException(HttpStatus.UNAUTHORIZED, GENERIC_CREDENTIALS_ERROR);
         }
 
-        if (emailVerificationRequired && !user.isEmailVerified()) {
-            auditService.record(AuditEventType.FAILED_LOGIN, user.getId(), Severity.WARN,
-                    "Login attempt before email verification");
-            throw new AuthException(HttpStatus.UNAUTHORIZED, GENERIC_CREDENTIALS_ERROR);
-        }
-
-        // Success: clear rate-limit counter and issue tokens.
-        rateLimitService.reset(rateLimitKey);
         return issueTokens(user, AuditEventType.LOGIN_SUCCESS, "Successful login");
     }
 
     @Transactional
-    public AuthResponse refresh(RefreshRequest request) {
+    public Map<String, Object> refresh(RefreshRequest request) {
         Claims claims = tokenProvider.parse(request.refreshToken());
         if (claims == null || !tokenProvider.isRefreshToken(claims)) {
             throw new AuthException(HttpStatus.UNAUTHORIZED, "Invalid refresh token");
@@ -177,7 +147,7 @@ public class AuthService {
     }
 
     /** Issues a fresh access+refresh pair and persists the new refresh token. */
-    private AuthResponse issueTokens(User user, AuditEventType event, String auditMessage) {
+    private Map<String, Object> issueTokens(User user, AuditEventType event, String auditMessage) {
         String accessToken = tokenProvider.generateAccessToken(user);
         String refreshToken = tokenProvider.generateRefreshToken(user);
 
@@ -185,8 +155,13 @@ public class AuthService {
         userRepository.save(user);
 
         auditService.record(event, user.getId(), Severity.INFO, auditMessage);
-        return new AuthResponse(true, accessToken, refreshToken,
-                tokenProvider.getAccessTokenValiditySeconds());
+
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("success", true);
+        response.put("accessToken", accessToken);
+        response.put("refreshToken", refreshToken);
+        response.put("expiresIn", tokenProvider.getAccessTokenValiditySeconds());
+        return response;
     }
 
     private String normalize(String email) {

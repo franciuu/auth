@@ -1,9 +1,9 @@
 package com.example.auth.config;
 
-import com.example.auth.entity.AuditEventType;
-import com.example.auth.entity.Role;
-import com.example.auth.entity.Severity;
-import com.example.auth.entity.User;
+import com.example.auth.model.AuditEventType;
+import com.example.auth.model.Role;
+import com.example.auth.model.Severity;
+import com.example.auth.model.User;
 import com.example.auth.repository.UserRepository;
 import com.example.auth.service.AuditService;
 import lombok.RequiredArgsConstructor;
@@ -50,7 +50,6 @@ public class DataInitializer implements CommandLineRunner {
                 .email(email)
                 .passwordHash(passwordEncoder.encode(adminPassword))
                 .fullName("System Administrator")
-                .emailVerified(true)
                 .active(true)
                 .roles(Set.of(Role.ROLE_ADMIN, Role.ROLE_USER))
                 .build();

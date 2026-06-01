@@ -1,5 +1,6 @@
-package com.example.auth.entity;
+package com.example.auth.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -11,6 +12,11 @@ import java.time.Instant;
 import java.util.HashSet;
 import java.util.Set;
 
+/**
+ * Database model for the "users" table.
+ * Sensitive fields are annotated with {@link JsonIgnore} so the entity can be
+ * returned directly in responses without leaking secrets.
+ */
 @Entity
 @Table(
         name = "users",
@@ -32,15 +38,12 @@ public class User {
     @Column(nullable = false, unique = true, length = 255)
     private String email;
 
+    @JsonIgnore
     @Column(name = "password_hash", nullable = false, length = 100)
     private String passwordHash;
 
     @Column(name = "full_name", nullable = false, length = 120)
     private String fullName;
-
-    @Column(name = "email_verified", nullable = false)
-    @Builder.Default
-    private boolean emailVerified = false;
 
     @Column(nullable = false)
     @Builder.Default
@@ -62,6 +65,7 @@ public class User {
      * token enforces one-time use: presenting a refresh token that no longer
      * matches the stored value is rejected.
      */
+    @JsonIgnore
     @Column(name = "refresh_token", length = 512)
     private String refreshToken;
 
