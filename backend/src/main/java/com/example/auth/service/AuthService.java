@@ -1,5 +1,6 @@
 package com.example.auth.service;
 
+import com.example.auth.dto.AuthResponse;
 import com.example.auth.dto.LoginRequest;
 import com.example.auth.dto.RefreshRequest;
 import com.example.auth.dto.RegisterRequest;
@@ -18,17 +19,11 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.Set;
 
 /**
  * Core authentication flows: registration, login, refresh-with-rotation, logout.
  * All client-facing failures use generic messages to prevent user enumeration.
- *
- * <p>Login and refresh return a plain map of token data (accessToken,
- * refreshToken, expiresIn) - kept deliberately simple since DTOs here are used
- * only for incoming requests.
  */
 @Service
 @RequiredArgsConstructor
@@ -75,7 +70,7 @@ public class AuthService {
     }
 
     @Transactional
-    public Map<String, Object> login(LoginRequest request) {
+    public AuthResponse login(LoginRequest request) {
         String email = normalize(request.email());
 
         User user = userRepository.findByEmail(email).orElse(null);
@@ -101,7 +96,7 @@ public class AuthService {
     }
 
     @Transactional
-    public Map<String, Object> refresh(RefreshRequest request) {
+    public AuthResponse refresh(RefreshRequest request) {
         Claims claims = tokenProvider.parse(request.refreshToken());
         if (claims == null || !tokenProvider.isRefreshToken(claims)) {
             throw new AuthException(HttpStatus.UNAUTHORIZED, "Invalid refresh token");
@@ -147,7 +142,7 @@ public class AuthService {
     }
 
     /** Issues a fresh access+refresh pair and persists the new refresh token. */
-    private Map<String, Object> issueTokens(User user, AuditEventType event, String auditMessage) {
+    private AuthResponse issueTokens(User user, AuditEventType event, String auditMessage) {
         String accessToken = tokenProvider.generateAccessToken(user);
         String refreshToken = tokenProvider.generateRefreshToken(user);
 
@@ -155,13 +150,8 @@ public class AuthService {
         userRepository.save(user);
 
         auditService.record(event, user.getId(), Severity.INFO, auditMessage);
-
-        Map<String, Object> response = new LinkedHashMap<>();
-        response.put("success", true);
-        response.put("accessToken", accessToken);
-        response.put("refreshToken", refreshToken);
-        response.put("expiresIn", tokenProvider.getAccessTokenValiditySeconds());
-        return response;
+        return new AuthResponse(true, accessToken, refreshToken,
+                tokenProvider.getAccessTokenValiditySeconds());
     }
 
     private String normalize(String email) {

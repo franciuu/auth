@@ -1,6 +1,8 @@
 package com.example.auth.controller;
 
+import com.example.auth.dto.AuthResponse;
 import com.example.auth.dto.LoginRequest;
+import com.example.auth.dto.MessageResponse;
 import com.example.auth.dto.RefreshRequest;
 import com.example.auth.dto.RegisterRequest;
 import com.example.auth.service.AuthService;
@@ -17,7 +19,6 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Duration;
-import java.util.Map;
 
 @RestController
 @RequestMapping("/api/auth")
@@ -37,27 +38,25 @@ public class AuthController {
 
     @Operation(summary = "Register a new account")
     @PostMapping("/register")
-    public ResponseEntity<Map<String, Object>> register(@Valid @RequestBody RegisterRequest request) {
+    public ResponseEntity<MessageResponse> register(@Valid @RequestBody RegisterRequest request) {
         authService.register(request);
         // Generic response regardless of whether the email already existed.
-        return ResponseEntity.status(HttpStatus.CREATED).body(Map.of(
-                "success", true,
-                "message", "If the details are valid, your account has been created."));
+        return ResponseEntity.status(HttpStatus.CREATED).body(MessageResponse.ok(
+                "If the details are valid, your account has been created."));
     }
 
     @Operation(summary = "Authenticate and receive access + refresh tokens")
     @PostMapping("/login")
-    public ResponseEntity<Map<String, Object>> login(@Valid @RequestBody LoginRequest request) {
-        Map<String, Object> response = authService.login(request);
+    public ResponseEntity<AuthResponse> login(@Valid @RequestBody LoginRequest request) {
+        AuthResponse response = authService.login(request);
         return ResponseEntity.ok()
-                .header(HttpHeaders.SET_COOKIE,
-                        buildRefreshCookie((String) response.get("refreshToken")).toString())
+                .header(HttpHeaders.SET_COOKIE, buildRefreshCookie(response.refreshToken()).toString())
                 .body(response);
     }
 
     @Operation(summary = "Rotate refresh token and issue a new access token")
     @PostMapping("/refresh")
-    public ResponseEntity<Map<String, Object>> refresh(
+    public ResponseEntity<AuthResponse> refresh(
             @RequestBody(required = false) RefreshRequest body,
             @CookieValue(value = REFRESH_COOKIE, required = false) String cookieToken) {
 
@@ -67,16 +66,15 @@ public class AuthController {
                 ? body.refreshToken()
                 : cookieToken;
 
-        Map<String, Object> response = authService.refresh(new RefreshRequest(token));
+        AuthResponse response = authService.refresh(new RefreshRequest(token));
         return ResponseEntity.ok()
-                .header(HttpHeaders.SET_COOKIE,
-                        buildRefreshCookie((String) response.get("refreshToken")).toString())
+                .header(HttpHeaders.SET_COOKIE, buildRefreshCookie(response.refreshToken()).toString())
                 .body(response);
     }
 
     @Operation(summary = "Log out: revoke the access token and clear the refresh token")
     @PostMapping("/logout")
-    public ResponseEntity<Map<String, Object>> logout(
+    public ResponseEntity<MessageResponse> logout(
             @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authHeader) {
 
         String accessToken = null;
@@ -87,7 +85,7 @@ public class AuthController {
 
         return ResponseEntity.ok()
                 .header(HttpHeaders.SET_COOKIE, clearedRefreshCookie().toString())
-                .body(Map.of("success", true, "message", "Logged out"));
+                .body(MessageResponse.ok("Logged out"));
     }
 
     private ResponseCookie buildRefreshCookie(String token) {

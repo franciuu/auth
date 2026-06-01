@@ -1,6 +1,6 @@
 package com.example.auth.controller;
 
-import com.example.auth.model.User;
+import com.example.auth.dto.UserProfileResponse;
 import com.example.auth.service.UserService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -22,7 +22,7 @@ public class UserController {
     @Operation(summary = "Get the current user's profile")
     @GetMapping("/profile")
     @PreAuthorize("hasAnyRole('USER', 'ADMIN')")
-    public User profile(@AuthenticationPrincipal String email) {
+    public UserProfileResponse profile(@AuthenticationPrincipal String email) {
         return userService.getProfile(email);
     }
 }

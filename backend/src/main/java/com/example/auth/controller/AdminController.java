@@ -1,6 +1,7 @@
 package com.example.auth.controller;
 
-import com.example.auth.model.User;
+import com.example.auth.dto.AdminUserResponse;
+import com.example.auth.dto.MessageResponse;
 import com.example.auth.service.UserService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -10,7 +11,6 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
-import java.util.Map;
 
 @RestController
 @RequestMapping("/api/admin")
@@ -23,15 +23,15 @@ public class AdminController {
 
     @Operation(summary = "List all users (admin action: LIST_USERS)")
     @GetMapping("/users")
-    public List<User> listUsers() {
+    public List<AdminUserResponse> listUsers() {
         return userService.listAllUsers();
     }
 
     @Operation(summary = "Disable a user account")
     @PostMapping("/disable-user/{userId}")
-    public Map<String, Object> disableUser(@PathVariable Long userId,
-                                           @AuthenticationPrincipal String adminEmail) {
+    public MessageResponse disableUser(@PathVariable Long userId,
+                                       @AuthenticationPrincipal String adminEmail) {
         userService.disableUser(userId, adminEmail);
-        return Map.of("success", true, "message", "User disabled");
+        return MessageResponse.ok("User disabled");
     }
 }
