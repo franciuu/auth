@@ -1,0 +1,195 @@
+package com.example.auth.service;
+
+import com.example.auth.dto.AuthResponse;
+import com.example.auth.dto.LoginRequest;
+import com.example.auth.dto.RefreshRequest;
+import com.example.auth.dto.RegisterRequest;
+import com.example.auth.entity.AuditEventType;
+import com.example.auth.entity.Role;
+import com.example.auth.entity.Severity;
+import com.example.auth.entity.User;
+import com.example.auth.exception.AuthException;
+import com.example.auth.repository.UserRepository;
+import com.example.auth.security.JwtTokenProvider;
+import io.jsonwebtoken.Claims;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.Set;
+
+/**
+ * Core authentication flows: registration, login, refresh-with-rotation, logout.
+ * All client-facing failures use generic messages to prevent user enumeration.
+ */
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class AuthService {
+
+    /** Generic credential error - identical for unknown email and wrong password. */
+    private static final String GENERIC_CREDENTIALS_ERROR = "Invalid credentials";
+
+    private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
+    private final JwtTokenProvider tokenProvider;
+    private final RateLimitService rateLimitService;
+    private final TokenBlacklistService tokenBlacklistService;
+    private final AuditService auditService;
+    private final EmailVerificationService emailVerificationService;
+
+    @Value("${app.email.verification-required:false}")
+    private boolean emailVerificationRequired;
+
+    @Transactional
+    public void register(RegisterRequest request) {
+        String email = normalize(request.email());
+
+        // Pre-hash so registration timing/response is identical whether or not
+        // the email already exists (anti-enumeration). We still avoid creating
+        // a duplicate, but the client always sees the same generic success.
+        String passwordHash = passwordEncoder.encode(request.password());
+
+        if (userRepository.existsByEmail(email)) {
+            // Do not reveal that the account exists.
+            log.info("Registration attempt for already-registered email (masked)");
+            auditService.record(AuditEventType.USER_REGISTERED, null, Severity.INFO,
+                    "Registration attempt for an existing email");
+            return;
+        }
+
+        User user = User.builder()
+                .email(email)
+                .passwordHash(passwordHash)
+                .fullName(request.fullName().trim())
+                .emailVerified(false)
+                .active(true)
+                .roles(Set.of(Role.ROLE_USER))
+                .build();
+        User saved = userRepository.save(user);
+
+        emailVerificationService.sendVerificationToken(email);
+        auditService.record(AuditEventType.USER_REGISTERED, saved.getId(), Severity.INFO,
+                "New user registered");
+    }
+
+    @Transactional
+    public void verifyEmail(String token) {
+        String email = emailVerificationService.consumeToken(token);
+        if (email == null) {
+            throw new AuthException(HttpStatus.BAD_REQUEST, "Invalid or expired verification token");
+        }
+        userRepository.findByEmail(email).ifPresent(user -> {
+            user.setEmailVerified(true);
+            userRepository.save(user);
+            auditService.record(AuditEventType.EMAIL_VERIFIED, user.getId(), Severity.INFO,
+                    "Email verified");
+        });
+    }
+
+    @Transactional
+    public AuthResponse login(LoginRequest request, String clientIp) {
+        String email = normalize(request.email());
+        String rateLimitKey = email + "|" + clientIp;
+
+        // Reject early if too many recent failures.
+        rateLimitService.checkAllowed(rateLimitKey);
+
+        User user = userRepository.findByEmail(email).orElse(null);
+
+        boolean passwordMatches = user != null
+                && passwordEncoder.matches(request.password(), user.getPasswordHash());
+
+        if (user == null || !passwordMatches) {
+            rateLimitService.recordFailure(rateLimitKey);
+            auditService.record(AuditEventType.FAILED_LOGIN,
+                    user != null ? user.getId() : null, Severity.WARN,
+                    "Failed login attempt");
+            throw new AuthException(HttpStatus.UNAUTHORIZED, GENERIC_CREDENTIALS_ERROR);
+        }
+
+        if (!user.isActive()) {
+            auditService.record(AuditEventType.FAILED_LOGIN, user.getId(), Severity.WARN,
+                    "Login attempt on disabled account");
+            // Generic message - do not disclose the account is disabled.
+            throw new AuthException(HttpStatus.UNAUTHORIZED, GENERIC_CREDENTIALS_ERROR);
+        }
+
+        if (emailVerificationRequired && !user.isEmailVerified()) {
+            auditService.record(AuditEventType.FAILED_LOGIN, user.getId(), Severity.WARN,
+                    "Login attempt before email verification");
+            throw new AuthException(HttpStatus.UNAUTHORIZED, GENERIC_CREDENTIALS_ERROR);
+        }
+
+        // Success: clear rate-limit counter and issue tokens.
+        rateLimitService.reset(rateLimitKey);
+        return issueTokens(user, AuditEventType.LOGIN_SUCCESS, "Successful login");
+    }
+
+    @Transactional
+    public AuthResponse refresh(RefreshRequest request) {
+        Claims claims = tokenProvider.parse(request.refreshToken());
+        if (claims == null || !tokenProvider.isRefreshToken(claims)) {
+            throw new AuthException(HttpStatus.UNAUTHORIZED, "Invalid refresh token");
+        }
+
+        String email = tokenProvider.getEmail(claims);
+        User user = userRepository.findByEmail(email).orElse(null);
+
+        // One-time use: the presented token must match the currently stored one.
+        if (user == null || !user.isActive()
+                || !request.refreshToken().equals(user.getRefreshToken())) {
+            // A mismatch may indicate a reused/stolen token: revoke the chain.
+            if (user != null) {
+                user.setRefreshToken(null);
+                userRepository.save(user);
+            }
+            throw new AuthException(HttpStatus.UNAUTHORIZED, "Invalid refresh token");
+        }
+
+        return issueTokens(user, AuditEventType.TOKEN_REFRESHED, "Refresh token rotated");
+    }
+
+    @Transactional
+    public void logout(String accessToken) {
+        if (accessToken == null) {
+            return;
+        }
+        Claims claims = tokenProvider.parse(accessToken);
+        if (claims == null) {
+            return;
+        }
+        // Blacklist the access token until its natural expiry.
+        tokenBlacklistService.blacklist(
+                tokenProvider.getJti(claims), tokenProvider.getExpiration(claims));
+
+        // Invalidate the refresh token so it cannot be rotated further.
+        userRepository.findByEmail(tokenProvider.getEmail(claims)).ifPresent(user -> {
+            Long uid = user.getId();
+            user.setRefreshToken(null);
+            userRepository.save(user);
+            auditService.record(AuditEventType.LOGOUT, uid, Severity.INFO, "User logged out");
+        });
+    }
+
+    /** Issues a fresh access+refresh pair and persists the new refresh token. */
+    private AuthResponse issueTokens(User user, AuditEventType event, String auditMessage) {
+        String accessToken = tokenProvider.generateAccessToken(user);
+        String refreshToken = tokenProvider.generateRefreshToken(user);
+
+        user.setRefreshToken(refreshToken);
+        userRepository.save(user);
+
+        auditService.record(event, user.getId(), Severity.INFO, auditMessage);
+        return new AuthResponse(true, accessToken, refreshToken,
+                tokenProvider.getAccessTokenValiditySeconds());
+    }
+
+    private String normalize(String email) {
+        return email == null ? null : email.trim().toLowerCase();
+    }
+}
